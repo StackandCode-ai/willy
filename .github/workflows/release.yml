@@ -19,7 +19,7 @@ jobs:
         run: |
           mkdir -p out
           git archive --format=tar.gz --prefix=willy/ -o out/willy-server.tar.gz HEAD \
-            -- install docker-compose.yml Dockerfile .dockerignore server server_agent pc_client/tools/git_ops.py pc_client/__init__.py README.md LICENSE
+            -- install docker-compose.yml Dockerfile .dockerignore server server_agent pc_client/tools/git_ops.py README.md LICENSE
       - uses: actions/upload-artifact@v4
         with: { name: server, path: out/willy-server.tar.gz }
 
