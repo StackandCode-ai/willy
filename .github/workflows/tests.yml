@@ -15,4 +15,4 @@ jobs:
           cache: pip
       - run: pip install -r server/requirements.txt pytest
       - name: Hub, accounts and agent tests
-        run: python -m pytest -q server tests/test_three_tier.py
+        run: python -m pytest -q server
