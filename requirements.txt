@@ -1,0 +1,43 @@
+# Willy: Voice-Driven Autonomous Windows System Controller
+# Core dependencies
+
+# LLM & AI Clients
+openai>=1.30.0
+groq>=0.9.0
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
+python-dotenv>=1.0.1
+
+# Audio Capture & Processing
+sounddevice>=0.4.6
+numpy>=1.26.0
+scipy>=1.13.0
+
+# Speech Synthesis (TTS)
+edge-tts>=6.1.12
+pygame>=2.5.2
+pyttsx3>=2.90
+
+# Windows System, Vision & UI Automation
+pyautogui>=0.9.54
+psutil>=5.9.8
+pygetwindow>=0.0.9
+pywin32>=306
+Pillow>=10.0.0
+mss>=10.0.0
+
+# Remote Gateway & WebSocket Server
+fastapi>=0.110.0
+uvicorn>=0.29.0
+websockets>=12.0
+
+# Accounts (Google sign-in, device keys) and push
+sqlalchemy>=2.0
+pymysql>=1.1
+google-auth>=2.29
+cryptography>=42.0
+requests>=2.31
+
+# CLI & Formatting
+rich>=13.7.1
+colorama>=0.4.6

@@ -1,0 +1,32 @@
+# Run the Willy hub:
+#   1. cp server/.env.example server/.env   and set WILLY_REMOTE_TOKEN (python -c "import secrets;print(secrets.token_urlsafe(32))") and GROQ_API_KEY
+#   2. docker compose up -d
+#   3. open http://localhost:8000/#token=<your token>
+# HTTPS for your own domain:  WILLY_DOMAIN=willy.example.com docker compose --profile https up -d
+services:
+  hub:
+    build: .
+    restart: unless-stopped
+    env_file: server/.env
+    environment:
+      WILLY_DATA_DIR: /data
+    volumes:
+      - willy-data:/data
+    ports:
+      - "8000:8000"
+
+  caddy:
+    image: caddy:2
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on: [hub]
+    command: caddy reverse-proxy --from ${WILLY_DOMAIN:?set WILLY_DOMAIN} --to hub:8000
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data
+
+volumes:
+  willy-data:
+  caddy-data:

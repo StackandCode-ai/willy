@@ -1,0 +1,13 @@
+.git
+venv
+**/__pycache__
+dist
+build
+mobile_app
+pc_client
+secrets
+logs
+tests
+*.env
+.env*
+!server/.env.example

@@ -1,0 +1,17 @@
+# Everything the hub (server/) and the server agent (server_agent/) need on Linux.
+fastapi>=0.110.0
+uvicorn>=0.29.0
+websockets>=12.0
+python-multipart>=0.0.9
+pydantic>=2.5.0
+python-dotenv>=1.0.0
+groq>=0.9.0
+openai>=1.30.0
+edge-tts>=6.1.12
+psutil>=5.9.8
+sqlalchemy>=2.0
+pymysql>=1.1
+google-auth>=2.29
+cryptography>=42.0
+requests>=2.31
+tzdata>=2024.1

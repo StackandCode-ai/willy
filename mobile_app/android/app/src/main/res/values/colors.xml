@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- WillyColors.cyan: tints push notifications -->
+    <color name="willy_accent">#FF00F2FE</color>
+</resources>
