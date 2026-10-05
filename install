@@ -1,14 +1,27 @@
 #!/usr/bin/env bash
-# Willy server installer.  Usage:   ./install            (asks a few questions)
-#                                   ./install --yes --domain willy.example.com --ai gemini --ai-key AIza...
+# Willy Linux Client Monitor Installer
 #
-# Sets up the Willy hub (the brain your phone and PC talk to) on this Linux machine:
-# Python environment, settings (.env, with a freshly generated access token), a service that
-# starts at boot, optional HTTPS for your domain, and optionally the Willy server agent that
-# lets you manage this machine by voice. Safe to run again: existing settings are kept.
+# Usage:
+#   ./install                         (Interactive setup for monitoring this Linux system)
+#   ./install --name "My Server"      (Specify a friendly device name)
+#   ./install --hub https://...       (Connect to a custom Willy Hub, default is truewilly.com)
+#   ./install --hub-server            (Self-host the Willy Central Hub on this machine instead)
+#
+# Sets up the Willy Client Monitor Agent on this Linux machine:
+# Installs a lightweight Python environment (psutil, websockets), pairs with your Willy
+# account, and registers a background systemd service so this machine's CPU, RAM, disk,
+# files, processes, and terminal can be monitored remotely from your Willy mobile and PC apps.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MODE="client" # "client" (default) or "hub"
+HUB="https://truewilly.com/willy"
+NAME=""
+TOKEN=""
+SERVICES=1
+ASSUME_YES=0
+
+# Hub server options (only used when --hub-server is specified)
 PORT=8000
 DOMAIN=""
 AI_PROVIDER=""
@@ -17,27 +30,49 @@ AI_MODEL=""
 AI_BASE=""
 SHARE=ask
 OWNER_EMAIL=""
-AGENT=ask
-ASSUME_YES=0
-SERVICES=1
+AGENT=no
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --port) PORT="$2"; shift 2 ;;
-    --domain) DOMAIN="$2"; shift 2 ;;
-    --ai) AI_PROVIDER="$2"; shift 2 ;;            # groq | gemini | openai | openrouter | custom
-    --ai-key) AI_KEY="$2"; shift 2 ;;
-    --ai-model) AI_MODEL="$2"; shift 2 ;;
-    --ai-base-url) AI_BASE="$2"; shift 2 ;;
-    --groq-key) AI_PROVIDER="groq"; AI_KEY="$2"; shift 2 ;;
+    --client|--agent|--monitor) MODE="client"; shift ;;
+    --hub-server|--server|--self-host) MODE="hub"; shift ;;
+    --hub)
+      if [ $# -gt 1 ] && [[ "$2" =~ ^https?:// ]]; then
+        HUB="$2"; shift 2
+      else
+        MODE="hub"; shift
+      fi
+      ;;
+    --name) NAME="$2"; shift 2 ;;
+    --token) TOKEN="$2"; shift 2 ;;
+    --no-service) SERVICES=0; shift ;;
+    -y|--yes) ASSUME_YES=1; shift ;;
+    # Hub server options
+    --port) MODE="hub"; PORT="$2"; shift 2 ;;
+    --domain) MODE="hub"; DOMAIN="$2"; shift 2 ;;
+    --ai) MODE="hub"; AI_PROVIDER="$2"; shift 2 ;;
+    --ai-key) MODE="hub"; AI_KEY="$2"; shift 2 ;;
+    --ai-model) MODE="hub"; AI_MODEL="$2"; shift 2 ;;
+    --ai-base-url) MODE="hub"; AI_BASE="$2"; shift 2 ;;
+    --groq-key) MODE="hub"; AI_PROVIDER="groq"; AI_KEY="$2"; shift 2 ;;
     --share-usage) SHARE=yes; shift ;;
     --no-share-usage) SHARE=no; shift ;;
     --owner-email) OWNER_EMAIL="$2"; shift 2 ;;
-    --agent) AGENT=yes; shift ;;
-    --no-agent) AGENT=no; shift ;;
-    --no-service) SERVICES=0; shift ;;
-    -y|--yes) ASSUME_YES=1; shift ;;
-    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)
+      echo "Willy Linux Installer"
+      echo
+      echo "Client Monitor Mode (Default):"
+      echo "  ./install                       Install monitor agent and pair with Willy"
+      echo "  ./install --name <name>         Set friendly device name (default: hostname)"
+      echo "  ./install --hub <url>           Set Hub URL (default: https://truewilly.com/willy)"
+      echo "  ./install --no-service          Run without creating systemd service"
+      echo "  ./install -y                    Non-interactive (use defaults)"
+      echo
+      echo "Self-Host Willy Central Hub:"
+      echo "  ./install --hub-server          Install and host the central Willy Hub on this server"
+      echo "  ./install --hub-server --port 8000 --domain willy.example.com"
+      exit 0
+      ;;
     *) echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -51,7 +86,7 @@ ask() { # ask "Question" default  -> echoes the answer
   local reply; read -r -p "$1 " reply || true; echo "${reply:-${2:-}}"
 }
 
-[ "$(uname -s)" = "Linux" ] || die "This installer is for Linux servers. On Windows download WillyPC.exe, on Android the .apk (see truewilly.com)."
+[ "$(uname -s)" = "Linux" ] || die "This installer is for Linux systems. On Windows download WillyPC-windows.zip, on Android download Willy.apk (see truewilly.com)."
 
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then
@@ -59,14 +94,17 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # ----------------------------------------------------------------------------- packages
-step "Checking Python and git"
+step "Checking Python and system packages"
 pm=""
-for candidate in apt-get dnf yum; do command -v "$candidate" >/dev/null 2>&1 && { pm="$candidate"; break; }; done
+for candidate in apt-get dnf yum pacman zypper; do command -v "$candidate" >/dev/null 2>&1 && { pm="$candidate"; break; }; done
 pkg_install() {
   [ -n "$pm" ] || die "Please install: $* (no supported package manager found)."
   case "$pm" in
     apt-get) $SUDO apt-get update -qq && $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$@" ;;
-    *) $SUDO "$pm" install -y -q "$@" ;;
+    dnf|yum) $SUDO "$pm" install -y -q "$@" ;;
+    pacman)  $SUDO pacman -Sy --noconfirm "$@" ;;
+    zypper)  $SUDO zypper --non-interactive in "$@" ;;
+    *)       $SUDO "$pm" install -y "$@" ;;
   esac
 }
 find_python() {
@@ -80,62 +118,20 @@ find_python() {
 }
 PY_BIN="$(find_python || true)"
 if [ -z "$PY_BIN" ]; then
-  warn "Python 3.10+ not found; installing."
+  warn "Python 3.10+ not found; attempting automatic installation."
   case "$pm" in
     apt-get) pkg_install python3 python3-venv python3-pip ;;
     dnf|yum) pkg_install python3.11 python3.11-pip || pkg_install python3 python3-pip ;;
+    pacman)  pkg_install python python-pip ;;
+    zypper)  pkg_install python311 python311-pip || pkg_install python3 python3-pip ;;
     *) pkg_install python3 python3-pip ;;
   esac
   PY_BIN="$(find_python || true)"
 fi
-[ -n "$PY_BIN" ] || die "Need Python 3.10 or newer (found: $(python3 --version 2>&1 || echo none)). On Amazon Linux / RHEL install with: sudo dnf install -y python3.11 python3.11-pip"
+[ -n "$PY_BIN" ] || die "Need Python 3.10 or newer (found: $(python3 --version 2>&1 || echo none)). On Amazon Linux/RHEL run: sudo dnf install -y python3.11 python3.11-pip"
 if [ "$pm" = "apt-get" ] && ! "$PY_BIN" -c 'import ensurepip, venv' >/dev/null 2>&1; then pkg_install python3-venv; fi
-command -v curl >/dev/null 2>&1 || pkg_install curl
 echo "Using $($PY_BIN --version 2>&1) ($PY_BIN)"
 
-# ----------------------------------------------------------------------------- environment
-step "Creating the Python environment (this takes a minute)"
-cd "$DIR"
-[ -d venv ] || "$PY_BIN" -m venv venv
-./venv/bin/python -m pip install -q --upgrade pip
-./venv/bin/python -m pip install -q -r server/requirements.txt
-echo "Dependencies installed."
-
-# ----------------------------------------------------------------------------- settings
-step "Writing settings"
-ENV_FILE="server/.env"
-[ -f "$ENV_FILE" ] || { cp server/.env.example "$ENV_FILE"; chmod 600 "$ENV_FILE"; }
-env_get() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- || true; }
-env_set() { # env_set KEY VALUE   (replaces the line, or appends)
-  local tmp; tmp="$(mktemp)"
-  grep -vE "^$1=" "$ENV_FILE" > "$tmp" || true
-  printf '%s=%s\n' "$1" "$2" >> "$tmp"
-  cat "$tmp" > "$ENV_FILE"; rm -f "$tmp"
-}
-TOKEN="$(env_get WILLY_REMOTE_TOKEN)"
-if [ "${#TOKEN}" -lt 20 ] || [ "$TOKEN" = "change-me-to-a-long-random-token" ]; then
-  TOKEN="$(./venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-  env_set WILLY_REMOTE_TOKEN "$TOKEN"
-  echo "Generated a new access token."
-fi
-[ -n "$(env_get SERVER_PORT)" ] && PORT="$(env_get SERVER_PORT)"
-env_set SERVER_PORT "$PORT"
-# --- which AI the brain uses (any provider; you can change it later in the dashboard: Set up > AI brain)
-# If AI provider flags were explicitly passed, set them now; otherwise ./setup handles it
-if [ -n "$AI_PROVIDER" ]; then
-  extra=()
-  [ -z "$AI_MODEL" ] || extra+=(--model "$AI_MODEL")
-  [ -z "$AI_BASE" ] || extra+=(--base-url "$AI_BASE")
-  ./venv/bin/python -m server.cli set-ai --provider "$AI_PROVIDER" --key "$AI_KEY" "${extra[@]}" || true
-fi
-
-# Telemetry and domain
-if [ "$SHARE" = no ]; then env_set WILLY_TELEMETRY off; else env_set WILLY_TELEMETRY on; fi
-if [ -n "$DOMAIN" ]; then env_set WILLY_PUBLIC_URL "https://$DOMAIN"; fi
-[ -z "$OWNER_EMAIL" ] || env_set WILLY_OWNER_EMAIL "$OWNER_EMAIL"
-mkdir -p server/data
-
-# ----------------------------------------------------------------------------- services
 write_unit() { # write_unit name description exec
   $SUDO tee "/etc/systemd/system/$1.service" >/dev/null <<UNIT
 [Unit]
@@ -149,14 +145,161 @@ User=$(id -un)
 WorkingDirectory=$DIR
 ExecStart=$3
 Restart=always
-RestartSec=3
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 UNIT
 }
+
 HAVE_SYSTEMD=0
 if [ "$SERVICES" = 1 ] && command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then HAVE_SYSTEMD=1; fi
+
+# =============================================================================
+# MODE: CLIENT MONITOR (Default)
+# =============================================================================
+if [ "$MODE" = "client" ]; then
+  echo
+  bold "======================================================================"
+  bold "         Willy Client Monitor Installer for Linux                     "
+  bold "======================================================================"
+  echo "Setting up this machine to be monitored by Willy."
+  echo "(Live CPU, RAM, disk, processes, files, remote terminal)"
+  echo
+
+  # 1. Environment
+  step "Setting up monitor environment"
+  cd "$DIR"
+  [ -d venv ] || "$PY_BIN" -m venv venv
+  ./venv/bin/python -m pip install -q --upgrade pip
+  ./venv/bin/python -m pip install -q psutil websockets
+  echo "Monitor dependencies ready (psutil, websockets)."
+
+  # 2. Existing settings check
+  EXISTING_TOKEN=""
+  EXISTING_HUB=""
+  EXISTING_NAME=""
+  if [ -f .env ]; then
+    EXISTING_TOKEN="$(grep -E '^WILLY_REMOTE_TOKEN=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+    EXISTING_HUB="$(grep -E '^WILLY_HUB_WS=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+    EXISTING_NAME="$(grep -E '^WILLY_SERVER_NAME=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+  fi
+
+  if [ -z "$NAME" ]; then
+    DEFAULT_NAME="${EXISTING_NAME:-$(hostname)}"
+    NAME="$(ask "Device name for this machine [$DEFAULT_NAME]:" "$DEFAULT_NAME")"
+  fi
+
+  NEED_PAIR=1
+  if [ -n "$EXISTING_TOKEN" ] && [ -n "$EXISTING_HUB" ]; then
+    echo "Found existing pairing for '$EXISTING_NAME' with $EXISTING_HUB."
+    if [ "$ASSUME_YES" = 1 ]; then
+      NEED_PAIR=0
+    else
+      REPAIR="$(ask "Do you want to re-pair with a new code? [y/N]:" "n")"
+      case "$REPAIR" in
+        y|Y|yes|YES) NEED_PAIR=1 ;;
+        *) NEED_PAIR=0 ;;
+      esac
+    fi
+  fi
+
+  if [ "$NEED_PAIR" = 1 ]; then
+    step "Connecting this machine to Willy"
+    DEF_HUB="https://truewilly.com/willy"
+    if [ -n "$EXISTING_HUB" ]; then
+      DEF_HUB="$(echo "$EXISTING_HUB" | sed 's|^wss://|https://|;s|^ws://|http://|;s|/ws/devices$||')"
+    fi
+    if [ -z "$HUB" ] || [ "$HUB" = "https://truewilly.com/willy" ]; then
+      HUB="$(ask "Willy Hub address [$DEF_HUB]:" "$DEF_HUB")"
+    fi
+    ./venv/bin/python -m server_agent.pair --hub "$HUB" --name "$NAME"
+  fi
+
+  # 3. Background service
+  step "Starting Willy Client Monitor service"
+  if [ "$HAVE_SYSTEMD" = 1 ]; then
+    write_unit willy-agent "Willy Client Monitor Agent" "$DIR/venv/bin/python -m server_agent.agent"
+    $SUDO systemctl daemon-reload
+    $SUDO systemctl enable --now willy-agent >/dev/null 2>&1
+    $SUDO systemctl restart willy-agent
+    echo "Service 'willy-agent' is enabled and running."
+  else
+    warn "systemd not available; starting monitor in background via nohup."
+    pkill -f "server_agent.agent" 2>/dev/null || true
+    nohup "$DIR/venv/bin/python" -m server_agent.agent >"$DIR/agent.log" 2>&1 &
+    echo "Monitor started in background (agent.log)."
+  fi
+
+  # 4. Completion
+  echo
+  bold "======================================================================"
+  bold "       [✓] WILLY CLIENT MONITOR INSTALLED & CONNECTED!                "
+  bold "======================================================================"
+  echo
+  echo "This Linux machine ('$NAME') is now live on Willy."
+  echo "You can monitor and manage it from your Willy mobile or PC app:"
+  echo "  • Live CPU, RAM, disk, load & uptime"
+  echo "  • Remote file explorer (upload/download)"
+  echo "  • Run terminal commands, restart services & check logs"
+  echo
+  if [ "$HAVE_SYSTEMD" = 1 ]; then
+    echo "Check status : sudo systemctl status willy-agent"
+    echo "View live log: sudo journalctl -u willy-agent -f"
+    echo "Restart agent: sudo systemctl restart willy-agent"
+  else
+    echo "View live log: tail -f $DIR/agent.log"
+  fi
+  echo "======================================================================"
+  exit 0
+fi
+
+# =============================================================================
+# MODE: WILLY CENTRAL HUB (Self-hosted)
+# =============================================================================
+bold "======================================================================"
+bold "         Willy Central Hub Server Installer                           "
+bold "======================================================================"
+echo "This mode installs the central Willy brain & hub server on this machine."
+echo
+
+step "Creating the Python environment (full hub requirements)"
+cd "$DIR"
+[ -d venv ] || "$PY_BIN" -m venv venv
+./venv/bin/python -m pip install -q --upgrade pip
+./venv/bin/python -m pip install -q -r server/requirements.txt
+echo "Dependencies installed."
+
+step "Writing settings"
+ENV_FILE="server/.env"
+[ -f "$ENV_FILE" ] || { cp server/.env.example "$ENV_FILE"; chmod 600 "$ENV_FILE"; }
+env_get() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- || true; }
+env_set() {
+  local tmp; tmp="$(mktemp)"
+  grep -vE "^$1=" "$ENV_FILE" > "$tmp" || true
+  printf '%s=%s\n' "$1" "$2" >> "$tmp"
+  cat "$tmp" > "$ENV_FILE"; rm -f "$tmp"
+}
+TOKEN="$(env_get WILLY_REMOTE_TOKEN)"
+if [ "${#TOKEN}" -lt 20 ] || [ "$TOKEN" = "change-me-to-a-long-random-token" ]; then
+  TOKEN="$(./venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+  env_set WILLY_REMOTE_TOKEN "$TOKEN"
+  echo "Generated a new access token."
+fi
+[ -n "$(env_get SERVER_PORT)" ] && PORT="$(env_get SERVER_PORT)"
+env_set SERVER_PORT "$PORT"
+
+if [ -n "$AI_PROVIDER" ]; then
+  extra=()
+  [ -z "$AI_MODEL" ] || extra+=(--model "$AI_MODEL")
+  [ -z "$AI_BASE" ] || extra+=(--base-url "$AI_BASE")
+  ./venv/bin/python -m server.cli set-ai --provider "$AI_PROVIDER" --key "$AI_KEY" "${extra[@]}" || true
+fi
+
+if [ "$SHARE" = no ]; then env_set WILLY_TELEMETRY off; else env_set WILLY_TELEMETRY on; fi
+if [ -n "$DOMAIN" ]; then env_set WILLY_PUBLIC_URL "https://$DOMAIN"; fi
+[ -z "$OWNER_EMAIL" ] || env_set WILLY_OWNER_EMAIL "$OWNER_EMAIL"
+mkdir -p server/data
 
 step "Starting the Willy hub"
 if [ "$HAVE_SYSTEMD" = 1 ]; then
@@ -168,6 +311,7 @@ else
   warn "No systemd here: starting the hub in the background (it won't survive a reboot)."
   nohup "$DIR/venv/bin/python" -m server.main >"$DIR/server/data/hub.log" 2>&1 &
 fi
+
 ok=0
 for _ in $(seq 1 40); do
   curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && { ok=1; break; }
@@ -176,7 +320,6 @@ done
 [ "$ok" = 1 ] || die "The hub didn't answer on port $PORT. Look at: journalctl -u willy-hub -n 50  (or server/data/hub.log)"
 echo "Hub is running on port $PORT."
 
-# ----------------------------------------------------------------------------- HTTPS
 URL="http://$(hostname -I 2>/dev/null | awk '{print $1}'):$PORT"
 if [ -n "$DOMAIN" ]; then
   step "Setting up HTTPS for $DOMAIN"
@@ -193,49 +336,15 @@ if [ -n "$DOMAIN" ]; then
     $SUDO systemctl enable --now caddy >/dev/null 2>&1 || true
     $SUDO systemctl reload caddy 2>/dev/null || $SUDO systemctl restart caddy
     URL="https://$DOMAIN"
-    echo "Caddy fetches the certificate by itself; ports 80 and 443 must be open to the internet."
-  else
-    warn "Install any web server that proxies $DOMAIN to 127.0.0.1:$PORT with HTTPS. With Caddy, the whole config is:"
-    printf '\n    %s {\n        reverse_proxy 127.0.0.1:%s\n    }\n\n' "$DOMAIN" "$PORT"
-    URL="https://$DOMAIN"
+    echo "Caddy fetches certificate automatically; ports 80 and 443 must be reachable."
   fi
 fi
 
-# ----------------------------------------------------------------------------- server agent
-if [ "$AGENT" = ask ]; then
-  case "$(ask 'Also install the Willy server agent, so Willy can show and manage this machine (CPU/RAM, files, shell, updates)? [Y/n]' 'y')" in
-    n|N|no|NO) AGENT=no ;; *) AGENT=yes ;;
-  esac
-fi
-if [ "$AGENT" = yes ]; then
-  step "Installing the server agent"
-  AGENT_ID="server_$(hostname | tr 'A-Z' 'a-z' | tr -c 'a-z0-9\n' '_')"
-  KEY="$(./venv/bin/python -m server.cli device-key --type server --id "$AGENT_ID" --name "$(hostname)")"
-  touch .env; chmod 600 .env
-  { grep -vE '^(WILLY_REMOTE_TOKEN|WILLY_HUB_WS|WILLY_SERVER_NAME)=' .env || true; } > .env.tmp
-  printf 'WILLY_REMOTE_TOKEN=%s\nWILLY_HUB_WS=ws://127.0.0.1:%s/ws/devices\nWILLY_SERVER_NAME=%s\n' "$KEY" "$PORT" "$(hostname)" >> .env.tmp
-  mv .env.tmp .env; chmod 600 .env
-  if [ "$HAVE_SYSTEMD" = 1 ]; then
-    write_unit willy-agent "Willy server agent" "$DIR/venv/bin/python -m server_agent.agent"
-    $SUDO systemctl daemon-reload
-    $SUDO systemctl enable --now willy-agent >/dev/null 2>&1
-    $SUDO systemctl restart willy-agent
-  else
-    nohup "$DIR/venv/bin/python" -m server_agent.agent >"$DIR/server/data/agent.log" 2>&1 &
-  fi
-  echo "The agent connects as a device called '$(hostname)'."
-fi
-
-# ----------------------------------------------------------------------------- done
 echo
 bold "======================================================================"
-bold "         [✓] WILLY INSTALLATION 100% COMPLETE!                        "
+bold "         [✓] WILLY HUB INSTALLATION COMPLETE!                         "
 bold "======================================================================"
 echo
-echo "Next step: Configure your user account, AI brain, and link devices:"
-echo "    Run in terminal:    ./setup"
-echo "    Or open in browser: ${URL}/setup"
-echo
-echo "Once setup finishes, your PC client and Mobile app will immediately"
-echo "appear linked to your account in the Willy Main Hub dashboard!"
+echo "Dashboard & Setup URL: ${URL}"
+echo "Run setup wizard     : ./setup"
 echo "======================================================================"

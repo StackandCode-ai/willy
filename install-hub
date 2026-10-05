@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Willy Hub Server Installer (Self-hosted)
+# Sets up the central Willy brain & hub server on this Linux machine.
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$DIR/install" --hub-server "$@"

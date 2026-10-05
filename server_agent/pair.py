@@ -72,21 +72,27 @@ def main() -> int:
     if not start.get("success"):
         print("Couldn't start pairing:", start.get("error"), file=sys.stderr)
         return 1
-    print(f"\n  1. Open:  {start['verify_url']}\n  2. Sign in with Google and check the code is  {start['code']}\n  3. Press Approve\n")
+    print(f"\n  To connect this machine to your Willy account:")
+    print(f"  1. Open in browser:  {start['verify_url']}")
+    print(f"  2. Confirm the pairing code is:  {start['code']}")
+    print(f"  3. Click Approve\n")
+    print(f"Waiting for approval (code: {start['code']})", end="", flush=True)
     deadline = time.time() + float(start.get("expires_in") or 600)
     while time.time() < deadline:
         time.sleep(2)
+        print(".", end="", flush=True)
         res = _post(base, "/api/v1/pair/poll", {"code": start["code"], "poll_secret": start["poll_secret"]})
         if res.get("status") == "approved":
             ws = base.replace("https://", "wss://").replace("http://", "ws://") + "/ws/devices"
             env = _env_path()
             _save(env, {"WILLY_REMOTE_TOKEN": res["device_key"], "WILLY_HUB_WS": ws, "WILLY_SERVER_NAME": args.name})
-            print(f"Paired with {res.get('email') or 'your account'}. Saved to {env}.\nRestart the agent to connect.")
+            print(f"\n\n[✓] Paired successfully with {res.get('email') or 'your account'}!")
+            print(f"Configuration saved to {env}.\n")
             return 0
         if res.get("_status") in (404, 410):
-            print("The code expired:", res.get("error"), file=sys.stderr)
+            print(f"\n\nThe code expired: {res.get('error')}", file=sys.stderr)
             return 1
-    print("Timed out waiting for approval.", file=sys.stderr)
+    print("\n\nTimed out waiting for approval.", file=sys.stderr)
     return 1
 
 

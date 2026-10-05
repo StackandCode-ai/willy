@@ -45,13 +45,13 @@ def _load_env() -> None:
             for line in candidate.read_text(encoding="utf-8", errors="ignore").splitlines():
                 if "=" in line and not line.lstrip().startswith("#"):
                     key, value = line.split("=", 1)
-                    os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+                    os.environ[key.strip()] = value.strip().strip('"').strip("'")
             break
 
 
 _load_env()
 TOKEN = os.getenv("WILLY_REMOTE_TOKEN", "")
-HUB_WS = os.getenv("WILLY_HUB_WS", "ws://127.0.0.1:8765/ws/devices")
+HUB_WS = os.getenv("WILLY_HUB_WS", "wss://truewilly.com/willy/ws/devices")
 HUB_HTTP = HUB_WS.replace("ws://", "http://").replace("wss://", "https://").split("/ws/")[0]
 NAME = os.getenv("WILLY_SERVER_NAME", "Willy Server")
 DEVICE_ID = "server_" + re.sub(r"[^a-z0-9]+", "_", socket.gethostname().lower()).strip("_")
@@ -475,15 +475,24 @@ async def main() -> None:
     import websockets
     import psutil
 
+    _load_env()
+    token = os.getenv("WILLY_REMOTE_TOKEN", "") or TOKEN
+    hub_ws = os.getenv("WILLY_HUB_WS", "") or HUB_WS
+    name = os.getenv("WILLY_SERVER_NAME", "") or NAME
+    if not token:
+        log("[!] WILLY_REMOTE_TOKEN is not configured in .env.")
+        log("[!] Please run './install' to connect this machine to your Willy account.")
+        return
+
     psutil.cpu_percent(interval=None)  # prime the CPU counter
-    query = urllib.parse.urlencode({"token": TOKEN, "device_id": DEVICE_ID, "device_type": "server", "name": NAME,
+    query = urllib.parse.urlencode({"token": token, "device_id": DEVICE_ID, "device_type": "server", "name": name,
                                     "hostname": socket.gethostname(), "platform": "Linux (" + os.uname().release + ")",
                                     "boot_time": int(psutil.boot_time())})
     delay = 2
     while True:
         try:
-            async with websockets.connect(f"{HUB_WS}?{query}", ping_interval=20, max_size=16 * 1024 * 1024) as ws:
-                log(f"[+] Connected to the hub as {NAME} ({DEVICE_ID})")
+            async with websockets.connect(f"{hub_ws}?{query}", ping_interval=20, max_size=16 * 1024 * 1024) as ws:
+                log(f"[+] Connected to Willy Hub as {name} ({DEVICE_ID})")
                 delay = 2
 
                 async def heartbeat():
